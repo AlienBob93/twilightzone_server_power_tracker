@@ -11,3 +11,5 @@ Implemented the Option A topology: NUT runs natively on the host and the Go app 
 - Added unit and integration tests; `go vet`, `go test ./...`, and a CGO-free build pass.
 
 Docker was unavailable, so image/compose startup was not exercised.
+
+Published to GitHub and licensed under GPL-3.0-only on 2026-10-29.

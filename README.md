@@ -54,6 +54,7 @@ web/                   embedded template, CSS and charting JavaScript
 config.yaml            container configuration baked into the image
 Dockerfile             multi-stage, CGO-free build
 docker-compose.yml     Option A topology (host NUT + app container)
+LICENSE                GNU General Public License v3.0
 worklog.md             implementation and validation notes
 ```
 
@@ -328,3 +329,10 @@ state. Nothing crashes.
 
 Run `upsc ec850lcd` on the host as the ground truth; if that fails, fix NUT
 before debugging the container.
+
+## License
+
+This project is licensed under the **GNU General Public License v3.0**
+(`GPL-3.0-only`). See [`LICENSE`](LICENSE) for the full text.
+
+Copyright (C) 2026 Prashant Rao.
