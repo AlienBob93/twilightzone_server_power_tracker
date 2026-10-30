@@ -1,0 +1,11 @@
+# /etc/nut/upsd.users
+#
+# The ups-monitor collector only reads variables, which upsd allows without
+# authentication. This user exists for upsmon, e.g. to trigger a clean host
+# shutdown when the battery runs low. Change the password before enabling it.
+#
+# File permissions: root:nut 0640.
+
+[monuser]
+    password = change-me-please
+    upsmon primary

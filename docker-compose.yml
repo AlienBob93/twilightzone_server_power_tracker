@@ -1,0 +1,30 @@
+# Option A: NUT runs natively on the Docker host (it owns the USB device), and
+# this container only talks to upsd over TCP port 3493. No --device and no
+# --privileged are required.
+
+services:
+  ups-monitor:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    image: twilightzone/ups-monitor:${VERSION:-latest}
+    container_name: ups-monitor
+    ports:
+      - "8080:8080"
+    volumes:
+      - ups-data:/var/lib/ups-monitor
+    environment:
+      NUT_HOST: ${NUT_HOST:-host.docker.internal}
+      NUT_PORT: ${NUT_PORT:-3493}
+      NUT_UPS: ${NUT_UPS:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    # Linux: map host.docker.internal to the host gateway so the container can
+    # reach the native upsd daemon.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    init: true
+
+volumes:
+  ups-data:
