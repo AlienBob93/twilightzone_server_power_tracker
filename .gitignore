@@ -1,17 +1,8 @@
+# Local environment overrides / secrets
+.env
+
 # Build output
 /bin/
-
-# Local database and runtime data
-/data/
-*.db
-*.db-shm
-*.db-wal
-
-# Local development module cache (used when $GOPATH is not writable)
-/.cache/
-
-# Local environment overrides
-.env
 
 # Editor and OS noise
 .DS_Store
