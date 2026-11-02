@@ -1,7 +1,66 @@
+# Deployment for the pwrstat -> MQTT load bridge.
+#
+# The container runs only this bridge. pwrstatd stays on the host under systemd
+# and keeps owning the UPS, so nothing here needs /dev/hidraw* and no vendor
+# daemon runs a second time.
+#
+# Verified on the deployment host:
+#   CLI     /usr/sbin/pwrstat   mode 0755 root:root, dynamically linked, needs
+#                               only libc (no libusb)
+#   Socket  /var/pwrstatd.ipc   mode 0755 root:root, path-based (not abstract),
+#                               and hardcoded: pwrstatd.conf has no socket option
+#   Daemon  pwrstatd.service    Restart=always, recreates the socket on restart
+#
+# Consequences:
+#   - The container must run as uid 0. Connecting to a unix socket requires
+#     write permission on the inode, and the mode is 0755 root:root, so only the
+#     owner may connect. This also means a ROOTFUL engine: a rootless engine maps
+#     container root to a subuid and cannot write that socket.
+#   - network_mode: host does not help. Host networking shares abstract sockets
+#     and TCP; a path socket is reached through the filesystem.
+#   - The socket cannot be avoided and cannot be relocated, so it is bind-mounted
+#     as a file. Its parent directory is /var and must not be mounted.
+#   - KNOWN LIMITATION: pwrstatd recreates the socket when it restarts, leaving a
+#     stale inode mounted here. The bridge then reports the entity unavailable
+#     until the container is restarted:
+#
+#         docker compose restart ups-mqtt
+#
+#     The failure is visible (entity unavailable, container unhealthy), not silent.
+
 services:
   ups-mqtt:
-    build: .
+    build:
+      context: .
+      args:
+        # The host is Ubuntu 26.04 (resolute). The vendor CLI is dynamically
+        # linked against that libc, so the base must be at least as new.
+        BASE_IMAGE: ubuntu:26.04
+    image: twilightzone-ups-mqtt
     container_name: twilightzone-ups-mqtt
     env_file:
       - .env
     restart: unless-stopped
+    user: "0:0"
+
+    volumes:
+      # Long syntax fails loudly when the source is missing; the short "-v" form
+      # would silently create an empty directory and give a confusing error.
+      - type: bind
+        source: ${PWRSTAT_HOST_PATH:-/usr/sbin/pwrstat}
+        target: /usr/sbin/pwrstat
+        read_only: true
+
+      # Deliberately read-write: connect(2) on a socket sitting in a read-only
+      # mount returns EROFS on older kernels. The bridge never writes this file.
+      - type: bind
+        source: /var/pwrstatd.ipc
+        target: /var/pwrstatd.ipc
+
+    healthcheck:
+      # Fails when pwrstatd is unreachable, including a stale socket.
+      test: ["CMD", "/usr/sbin/pwrstat", "-status"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
