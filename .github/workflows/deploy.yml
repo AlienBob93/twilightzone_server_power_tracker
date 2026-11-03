@@ -1,0 +1,34 @@
+name: Deploy to Dockhand
+
+# Reuses the shared Tailscale OAuth client (tag:ci) that the other repos on this
+# pipeline use. Rotating that client means updating every repo carrying this file.
+on:
+  push:
+    branches: [ mqtt-ha-integration ]
+
+permissions:
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: dockhand-deploy-ups-mqtt
+      cancel-in-progress: false
+    steps:
+      # Pinned to v4.2.0 for supply-chain safety; tracker-server uses @v4.
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Trigger Dockhand git stack sync
+        env:
+          DOCKHAND_STACK_ID: ${{ vars.DOCKHAND_STACK_ID }}
+          DOCKHAND_WEBHOOK_SECRET: ${{ secrets.DOCKHAND_WEBHOOK_SECRET }}
+        run: |
+          curl -fsS -X POST \
+            -H "X-Gitlab-Token: $DOCKHAND_WEBHOOK_SECRET" \
+            "https://dockhand.tail7c4ba4.ts.net/api/git/stacks/$DOCKHAND_STACK_ID/webhook"
