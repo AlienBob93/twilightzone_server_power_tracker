@@ -1,7 +1,9 @@
 name: Deploy to Dockhand
 
-# Reuses the shared Tailscale OAuth client (tag:ci) that the other repos on this
-# pipeline use. Rotating that client means updating every repo carrying this file.
+# Uses this repo's own Tailscale OAuth client (tag:ci), created 2026-11-03.
+# The older tag:ci client is still used by twilightzone-tracker-server. Both
+# carry the same tag, so tailnet access is identical, but rotating or deleting
+# one does not affect the other — never delete a client a repo still references.
 on:
   push:
     branches: [ mqtt-ha-integration ]
