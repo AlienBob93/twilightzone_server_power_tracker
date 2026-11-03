@@ -1,4 +1,4 @@
-name: Deploy to Dockhand
+name: Test and Deploy to Dockhand
 
 # Uses this repo's own Tailscale OAuth client (tag:ci), created 2026-11-03.
 # The older tag:ci client is still used by twilightzone-tracker-server. Both
@@ -12,7 +12,34 @@ permissions:
   id-token: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    # The OIDC token is minted at workflow level for the tailnet. This job only
+    # compiles and runs the suite, so it must not be able to request one.
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Follows the go directive in go.mod instead of pinning a version here.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      # -race needs cgo, so it runs here (gcc is on ubuntu-latest) and not in
+      # the Dockerfile, whose build stage sets CGO_ENABLED=0.
+      - name: Test
+        run: go test -race ./...
+
   deploy:
+    # A red suite means the image never reaches Dockhand.
+    needs: test
     runs-on: ubuntu-latest
     concurrency:
       group: dockhand-deploy-ups-mqtt
