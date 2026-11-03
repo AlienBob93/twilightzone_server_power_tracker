@@ -26,8 +26,8 @@ func main() {
 		SetCleanSession(true).
 		SetAutoReconnect(true).
 		SetConnectRetry(true).
-		SetConnectRetryInterval(5 * time.Second).
-		SetKeepAlive(30 * time.Second).
+		SetConnectRetryInterval(5*time.Second).
+		SetKeepAlive(30*time.Second).
 		SetWill(cfg.AvailabilityTopic(), "offline", 1, true)
 
 	if cfg.Username != "" {

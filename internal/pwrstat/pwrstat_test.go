@@ -335,9 +335,20 @@ func TestCollectCancelled(t *testing.T) {
 	}
 }
 
-// silent failure: exit non-zero without printing anything → final fallback
+// TestCollectSilentFailure covers the final fallback in Collect: the process
+// exited non-zero without writing anything to stderr, so there is no daemon
+// message to attach. The sample must still stay retryable.
 func TestCollectSilentFailure(t *testing.T) {
-    path := writePwrstat(t, "exit 1\n")
-    _, err := Collect(context.Background(), path, 5*time.Second)
-    if err == nil || IsUnusable(err) { ... }
+	path := writePwrstat(t, "exit 1\n")
+
+	_, err := Collect(context.Background(), path, 5*time.Second)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if IsUnusable(err) {
+		t.Fatalf("a silent non-zero exit must stay retryable, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "-status") {
+		t.Fatalf("error %q should name the command", err)
+	}
 }

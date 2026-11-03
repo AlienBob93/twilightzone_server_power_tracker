@@ -9,12 +9,12 @@ import (
 // DiscoveryPayload returns the retained configuration for the starter sensor.
 func DiscoveryPayload(cfg config.Config) string {
 	payload := map[string]interface{}{
-		"name":                 "Bridge status",
-		"unique_id":            cfg.DeviceID + "_bridge_status",
-		"default_entity_id":    "sensor.twilightzone_ups_bridge_status",
-		"state_topic":          cfg.StateTopic(),
-		"availability_topic":   cfg.AvailabilityTopic(),
-		"payload_available":    "online",
+		"name":                  "Bridge status",
+		"unique_id":             cfg.DeviceID + "_bridge_status",
+		"default_entity_id":     "sensor.twilightzone_ups_bridge_status",
+		"state_topic":           cfg.StateTopic(),
+		"availability_topic":    cfg.AvailabilityTopic(),
+		"payload_available":     "online",
 		"payload_not_available": "offline",
 		"device": map[string]interface{}{
 			"identifiers":  []string{cfg.DeviceID},
