@@ -34,8 +34,15 @@ services:
       context: .
     image: twilightzone-ups-mqtt
     container_name: twilightzone-ups-mqtt
+    # Dockhand writes plain stack vars to .env and encrypted ones to
+    # .env.dockhand. Both are optional so the same file also runs locally, where
+    # neither exists. Without the second entry MQTT_USER/MQTT_PASS never reach
+    # the container and the broker rejects the client.
     env_file:
-      - .env
+      - path: .env
+        required: false
+      - path: .env.dockhand
+        required: false
     restart: unless-stopped
     user: "0:0"
 
