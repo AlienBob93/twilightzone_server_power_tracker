@@ -62,10 +62,12 @@ Verified on the deployment host, not inferred:
 daemon socket (`/var/pwrstatd.ipc`, read-write — `connect(2)` on a socket inside
 a read-only mount returns `EROFS` on older kernels).
 
-1. **Base image is pinned.** The host is Ubuntu 26.04 (resolute) and the vendor
-   CLI is dynamically linked against its libc, so `docker-compose.yml` and the
-   `Dockerfile` both default to `ubuntu:26.04`. Do not lower this to an older
-   base or a musl image (Alpine) — the mounted binary would fail to load. The
+1. **Base image is pinned in the `Dockerfile`.** The host is Ubuntu 26.04
+   (resolute) and the vendor CLI is dynamically linked against its libc, so the
+   runtime stage is `FROM ubuntu:26.04` literally. Do not lower this to an older
+   base or a musl image (Alpine) — the mounted binary would fail to load. It is
+   deliberately not a build arg: the deploy pipeline builds the Dockerfile
+   without compose `build.args`, and an unpinned value resolves to empty. The
    image has no CA bundle by default, so the `Dockerfile` installs
    `ca-certificates` when `apt-get` is present.
 

@@ -15,12 +15,14 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ups-mqtt ./cmd/ups
 # CLI itself is bind-mounted read-only at run time (see compose.yaml) to avoid
 # vendoring proprietary binaries into the image.
 #
-# BASE_IMAGE determines the glibc the vendor CLI runs against. The host is
-# Ubuntu 26.04 (resolute) and the CLI is dynamically linked against its libc, so
-# the image must be at least as new — do not downgrade this to an older base or
-# to a musl-based image, or the mounted binary will fail to load.
-ARG BASE_IMAGE=ubuntu:26.04
-FROM ${BASE_IMAGE}
+# The host is Ubuntu 26.04 (resolute) and the pwrstat CLI is dynamically linked
+# against its libc, so the base must be at least as new — do not downgrade this
+# to an older release or a musl image, or the mounted binary will fail to load.
+#
+# Pinned literally rather than through an ARG: the deploy pipeline builds this
+# Dockerfile without compose build args, and an unpinned BASE_IMAGE resolves to
+# empty in FROM.
+FROM ubuntu:26.04
 
 RUN set -eux; \
     if command -v apt-get >/dev/null 2>&1; then \
@@ -34,9 +36,10 @@ RUN set -eux; \
 
 COPY --from=build /out/ups-mqtt /usr/local/bin/ups-mqtt
 
-# /usr/bin/pwrstat is mode 0700 on the host, so the process must run as root.
-# Do not drop all capabilities: root needs DAC_OVERRIDE to execute the mounted
-# binary when its host owner does not map to uid 0 inside the container.
+# The CLI is world-executable, but the daemon socket (/var/pwrstatd.ipc) is
+# 0755 root:root, and connecting to a unix socket requires write permission on
+# the inode — which only the owner holds. Run as root, and do not drop
+# CAP_DAC_OVERRIDE in case the mounted socket's owner does not map to uid 0 here.
 USER root
 
 ENTRYPOINT ["/usr/local/bin/ups-mqtt"]

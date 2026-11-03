@@ -127,9 +127,10 @@ failure is visible rather than silent.
 
 The image's glibc must be at least as new as the host's, because the CLI is
 dynamically linked against libc (only `libc.so.6`, no libusb). The host is
-Ubuntu 26.04, so `BASE_IMAGE` is pinned to `ubuntu:26.04` in both the compose
-file and the `Dockerfile`; a musl base or an older Ubuntu/Debian would fail to
-load the mounted binary.
+Ubuntu 26.04, so the `Dockerfile` runtime stage is `FROM ubuntu:26.04` literally
+rather than through a build arg — the deploy pipeline builds without compose
+`build.args`, and a blank value breaks `FROM`. A musl base or an older
+Ubuntu/Debian would fail to load the mounted binary.
 
 Running the same binary on the host under systemd removes the mount, the glibc
 coupling and the staleness problem entirely.
