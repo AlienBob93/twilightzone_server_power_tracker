@@ -1,6 +1,10 @@
 package pwrstat
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 // statusEC850LCD is verbatim output from the target UPS (CyberPower EC850LCD).
 // Fields are indented with tabs, and the dot padding is aligned to the longest
@@ -52,33 +56,35 @@ func TestParseLoad(t *testing.T) {
 		name    string
 		output  string
 		want    float64
-		wantErr bool
+		wantErr error // nil means success; otherwise errors.Is must match
 	}{
 		{name: "ec850lcd normal", output: statusEC850LCD, want: 66},
 		{name: "cp585 manual example is zero, not the rating", output: statusCP585, want: 0},
 		{name: "minimal dot padding", output: "Load....66 Watt(13 %)\n", want: 66},
 		{name: "spaces for indentation", output: "        Load......................... 66 Watt(13 %)\n", want: 66},
-		{name: "no dot leader", output: "        Load        66 Watt(13 %)\n", wantErr: true},
 		{name: "fractional watts", output: "\t\tLoad......................... 66.5 Watt(13 %)\n", want: 66.5},
 		{name: "lowercase unit", output: "\t\tLoad......................... 66 watt(13 %)\n", want: 66},
 		{name: "zero load", output: "\t\tLoad......................... 0 Watt(0 %)\n", want: 0},
 
-		{name: "no load field", output: "\t\tState........................ Normal\n", wantErr: true},
-		{name: "empty output", output: "", wantErr: true},
-		{name: "load field with empty value", output: "\t\tLoad.........................\n", wantErr: true},
-		{name: "load without unit", output: "\t\tLoad......................... 66\n", wantErr: true},
-		{name: "unparsable value", output: "\t\tLoad......................... unknown\n", wantErr: true},
-		{name: "number is not the leading token", output: "\t\tLoad......................... 3 x 66 Watt(5 %)\n", wantErr: true},
-		{name: "only rating power present", output: "\t\tRating Power................. 510 Watt\n", wantErr: true},
-		{name: "another label containing Load", output: "\t\tOverload..................... 66 Watt(13 %)\n", wantErr: true},
+		{name: "no load field", output: "\t\tState........................ Normal\n", wantErr: ErrFieldMissing},
+		{name: "empty output", output: "", wantErr: ErrFieldMissing},
+		{name: "only rating power present", output: "\t\tRating Power................. 510 Watt\n", wantErr: ErrFieldMissing},
+		{name: "another label containing Load", output: "\t\tOverload..................... 66 Watt(13 %)\n", wantErr: ErrFieldMissing},
+		{name: "no dot leader", output: "        Load        66 Watt(13 %)\n", wantErr: ErrFieldMissing},
+
+		{name: "load field with empty value", output: "\t\tLoad.........................\n", wantErr: ErrValueUnparseable},
+		{name: "load without unit", output: "\t\tLoad......................... 66\n", wantErr: ErrValueUnparseable},
+		{name: "unparsable value", output: "\t\tLoad......................... unknown\n", wantErr: ErrValueUnparseable},
+		{name: "number is not the leading token", output: "\t\tLoad......................... 3 x 66 Watt(5 %)\n", wantErr: ErrValueUnparseable},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := ParseLoad(test.output)
-			if test.wantErr {
-				if err == nil {
-					t.Fatalf("expected an error, got %v", got)
+
+			if test.wantErr != nil {
+				if !errors.Is(err, test.wantErr) {
+					t.Fatalf("error = %v, want %v", err, test.wantErr)
 				}
 				return
 			}
@@ -101,6 +107,18 @@ func TestParseLoadNeverUsesRatingPower(t *testing.T) {
 	}
 	if got != 0 {
 		t.Fatalf("ParseLoad() = %v, want 0: the Rating Power value must not be used", got)
+	}
+}
+
+// TestParseLoadErrorCarriesTheValue makes sure the unparseable-value error says
+// what the daemon actually printed, which is the only clue in a container log.
+func TestParseLoadErrorCarriesTheValue(t *testing.T) {
+	_, err := ParseLoad("\t\tLoad......................... unknown\n")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "unknown") {
+		t.Fatalf("error %q does not mention the offending value", err)
 	}
 }
 
