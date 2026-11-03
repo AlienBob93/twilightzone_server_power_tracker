@@ -2,11 +2,17 @@
 package pwrstat
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -65,4 +71,75 @@ func splitField(line string) (label, value string, ok bool) {
 	label = strings.TrimSpace(line[:start])
 	value = strings.TrimSpace(strings.TrimLeft(line[start:], "."))
 	return label, value, true
+}
+
+// IsUnusable reports whether err means the pwrstat binary cannot be run at all,
+// as opposed to running and failing.
+//
+// It matches a missing or non-executable binary (fs.ErrNotExist,
+// fs.ErrPermission, exec.ErrNotFound), typically caused by a wrong PWRSTAT_PATH
+// or by invoking the vendor CLI without sufficient privileges.
+//
+// It deliberately does not match a non-zero exit status or a context error: a
+// stopped daemon or a slow call is transient, and treating either as fatal would
+// turn a temporary outage into a restart loop.
+func IsUnusable(err error) bool {
+	return errors.Is(err, fs.ErrPermission) ||
+		errors.Is(err, fs.ErrNotExist) ||
+		errors.Is(err, exec.ErrNotFound)
+}
+
+// Collect runs "pwrstat -status" and returns the current load in watts.
+//
+// The invocation is bounded by timeout; the child process is killed if it
+// overruns, so a wedged daemon cannot stall the caller. LC_ALL and LANG are
+// pinned to C so that the output labels stay in English regardless of the host
+// locale; ParseLoad matches those labels literally.
+//
+// Errors fall into three classes, kept distinct so the caller can choose between
+// "refuse to start" and "retry on the next tick":
+//
+//   - IsUnusable(err): the binary cannot be executed at all (wrong path, missing
+//     package, insufficient permissions). This does not resolve itself at run
+//     time and should be fatal at startup.
+//   - A context error: the timeout fired, or the caller's context was cancelled.
+//     Transient by definition.
+//   - Anything else: a non-zero exit, usually the daemon being down, or a parse
+//     error wrapping ErrFieldMissing / ErrValueUnparseable. The daemon's stderr
+//     is included in the message when it printed one.
+//
+// A non-nil error always means there is no usable reading; never publish the
+// zero value that accompanies it, since zero is itself a valid load.
+func Collect(ctx context.Context, path string, timeout time.Duration) (float64, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, path, "-status")
+	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.Output()
+	if err != nil {
+		if IsUnusable(err) {
+			return 0, fmt.Errorf("run %s: %w", path, err) // fatal class
+		}
+		// Inspect the context this call created rather than the error chain: whether
+		// a killed child surfaces as a context error or as *exec.ExitError depends
+		// on timing, while ctx.Err() is non-nil exactly when our deadline fired or
+		// the caller was cancelled.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if errors.Is(ctxErr, context.DeadlineExceeded) {
+				return 0, fmt.Errorf("%s -status timed out after %s: %w", path, timeout, ctxErr)
+			}
+			return 0, fmt.Errorf("%s -status cancelled: %w", path, ctxErr)
+		}
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return 0, fmt.Errorf("%s -status: %w: %s", path, err, msg) // daemon class
+		}
+		return 0, fmt.Errorf("%s -status: %w", path, err)
+	}
+
+	return ParseLoad(string(out))
 }
