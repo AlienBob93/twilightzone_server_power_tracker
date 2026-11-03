@@ -83,6 +83,10 @@ func splitField(line string) (label, value string, ok bool) {
 // It deliberately does not match a non-zero exit status or a context error: a
 // stopped daemon or a slow call is transient, and treating either as fatal would
 // turn a temporary outage into a restart loop.
+// IsUnusable reports whether err means the CLI itself cannot be executed, as
+// opposed to a transient failure such as a stopped daemon, a timeout, or output
+// drift. Unusable errors do not heal on their own, so startup treats them as
+// fatal.
 func IsUnusable(err error) bool {
 	return errors.Is(err, fs.ErrPermission) ||
 		errors.Is(err, fs.ErrNotExist) ||
@@ -110,6 +114,14 @@ func IsUnusable(err error) bool {
 //
 // A non-nil error always means there is no usable reading; never publish the
 // zero value that accompanies it, since zero is itself a valid load.
+// Collect runs the pwrstat CLI at path and returns the UPS load in watts. The
+// call is bounded by timeout plus the child's WaitDelay.
+//
+// Errors keep their sentinels so callers can classify them: exec and permission
+// failures still match fs and exec errors (see IsUnusable), a timeout wraps
+// context.DeadlineExceeded, and a diagnostic printed by the daemon on stderr is
+// included in the message. Parse failures wrap ErrFieldMissing or
+// ErrValueUnparseable.
 func Collect(ctx context.Context, path string, timeout time.Duration) (float64, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

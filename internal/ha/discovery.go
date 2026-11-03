@@ -1,3 +1,5 @@
+// Package ha builds the Home Assistant MQTT discovery payload for the bridge's
+// single sensor.
 package ha
 
 import (

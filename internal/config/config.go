@@ -1,3 +1,5 @@
+// Package config reads the bridge's configuration from the environment,
+// applies defaults, and validates the result.
 package config
 
 import (
@@ -10,6 +12,8 @@ import (
 	"time"
 )
 
+// Config is the validated configuration for one bridge instance. It is built
+// only by Load, which enforces the topic and duration invariants.
 type Config struct {
 	BrokerURL       string
 	Username        string
@@ -91,20 +95,27 @@ func getPositiveSecondsFromEnvString(key, fallback string) (time.Duration, error
 	return time.Duration(seconds * float64(time.Second)), nil
 }
 
+// StateTopic is the retained topic carrying the load in watts.
 func (c Config) StateTopic() string {
 	return c.StatePrefix + "/" + LoadObjectID
 	// ex: twilightzone/ups/load
 }
 
+// AvailabilityTopic is the retained online/offline topic. It is also the topic
+// of the MQTT Last Will, so a killed process still marks the entity offline.
 func (c Config) AvailabilityTopic() string {
 	return c.StatePrefix + "/availability"
 }
 
+// DiscoveryTopic is the retained Home Assistant discovery topic for the load
+// sensor.
 func (c Config) DiscoveryTopic() string {
 	return fmt.Sprintf("%s/sensor/%s/%s/config", c.DiscoveryPrefix, c.DeviceID, LoadObjectID)
 	// ex: homeassistant/sensor/twilightzone_ups/load/config
 }
 
+// env returns the value of key, treating an empty value as unset so that an
+// exported-but-blank variable still gets the default.
 func env(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
@@ -112,6 +123,8 @@ func env(key, fallback string) string {
 	return fallback
 }
 
+// topicSegmentSafe reports whether value can be used as one MQTT topic segment
+// and in an entity id: letters, digits, underscore and hyphen only.
 func topicSegmentSafe(value string) bool {
 	if value == "" {
 		return false

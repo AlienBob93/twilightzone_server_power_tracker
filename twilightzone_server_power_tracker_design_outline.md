@@ -1,8 +1,10 @@
 # Twilight Zone UPS load bridge — design record
 
-> **Status: target design.** The implementation is not written yet. `cmd/` and
-> `internal/` still contain the placeholder starter (`bridge_status` /
-> `not_implemented`). This file records the decisions to implement against.
+> **Status: implemented and deployed.** This file is the decision record; the
+> code it describes lives in `cmd/ups-mqtt` and `internal/`. Where the
+> implementation settled a detail this plan left open — the ticker, the timeout
+> default, the atomic availability flag — the delivered behaviour is noted
+> inline and summarised under [As built](#as-built).
 
 ## Scope
 
@@ -15,7 +17,7 @@ runtime, state flags, test results, outage history, thresholds, energy totals.
 ## Topology
 
 ```text
-UPS (USB HID) <- pwrstatd (host, root, systemd) <- pwrstat CLI (root-only 0700)
+UPS (USB HID) <- pwrstatd (host, root, systemd) <- pwrstat CLI (0755; the socket needs root)
                                                           ^
                                                           | bind-mounted socket
                                                     [container: ups-mqtt] -> MQTT -> Home Assistant
@@ -77,9 +79,13 @@ battery left `State` at `Normal`, `Test Result` at `Unknown`, and no log entry �
 short transitions can be missed entirely. Default `POLL_INTERVAL` is therefore
 15 s, and no automation should treat this bridge as a transient-power detector.
 
-Design the loop with a timer reset after each sample (fixed delay), so a slow
-sample cannot cause back-to-back publishes, and bound each sample with
-`PWRSTAT_TIMEOUT` through the command context.
+The loop is implemented with a fixed-rate `time.Ticker`, not the fixed-delay
+timer considered here. That is safe because `config` enforces
+`PWRSTAT_TIMEOUT < POLL_INTERVAL` and the collector adds a 2 s `cmd.WaitDelay`:
+at the defaults (10 s timeout, 15 s interval) the worst case is 12 s of a 15 s
+interval, so a slow sample cannot overlap the next tick. Each sample is bounded
+by `PWRSTAT_TIMEOUT` through the command context, which kills the child rather
+than waiting for it.
 
 ### Topics and entity
 
@@ -97,9 +103,11 @@ Entity: `sensor.twilightzone_ups_load`, `device_class: power`,
 
 | Failure | Detection | Behaviour |
 | --- | --- | --- |
-| Binary missing or not executable | `fs.ErrNotExist` / `fs.ErrPermission` | Fatal at startup: the CLI cannot be executed at all. |
+| Binary missing or not executable | `fs.ErrNotExist` / `fs.ErrPermission` / `exec.ErrNotFound` | Fatal at startup: the CLI cannot be executed at all. Never fatal in the loop. |
 | Daemon not running | non-zero exit, stderr text | Logged; after 3 consecutive failures publish retained `offline`. |
-| Output drift (no `Load` line) | parse error | Counts as a failed sample; no value is published. |
+| Output drift (no `Load` line) | `ErrFieldMissing` / `ErrValueUnparseable` | Counts as a failed sample; no value is published. |
+| Sample times out | `context.DeadlineExceeded` | Counts as a failed sample; retryable. |
+| Bridge stopping | `context.Canceled` while `ctx.Err() != nil` | Not counted as a UPS failure; clean `offline` publish and disconnect. |
 | Process hang | no publish | `expire_after` makes the entity unavailable. |
 | Process kill / reboot | connection drops | Broker publishes the retained Last Will. |
 
@@ -145,11 +153,27 @@ whereas a counter in this process would need its own persistence.
 
 | Path | Status | Purpose |
 | --- | --- | --- |
-| `internal/pwrstat/` | **to write** | CLI invocation, `Load` parsing, error classification. |
-| `internal/config/` | to extend | `PWRSTAT_PATH`, `PWRSTAT_TIMEOUT`, `DEVICE_MODEL`; retarget topics to `…/load`. |
-| `internal/ha/` | to rewrite | Single-sensor discovery payload. |
-| `cmd/ups-mqtt/` | to rewrite | Sample loop, availability state machine, shutdown. |
+| `internal/pwrstat/` | done, tested | CLI invocation, `Load` parsing, error classification (`ErrFieldMissing`, `ErrValueUnparseable`, `IsUnusable`). |
+| `internal/config/` | done, tested | `PWRSTAT_PATH`, `PWRSTAT_TIMEOUT`, `DEVICE_MODEL`, `LoadObjectID`; topics retargeted to `…/load`; device-id and duration validation. |
+| `internal/ha/` | done, tested | Single-sensor discovery payload. |
+| `cmd/ups-mqtt/` | done, `readLoad` tested | Startup probe, sample loop, availability state machine, shutdown. |
 | `Dockerfile`, `docker-compose.yml` | done | Container build and deployment scaffold. |
+| `.github/workflows/deploy.yml` | done | `test` job (`go vet`, `go test -race`) gates the Dockhand deploy job. |
+
+## As built
+
+Details the plan left open, settled during implementation:
+
+| | |
+| --- | --- |
+| Defaults | `POLL_INTERVAL=15`, `PWRSTAT_TIMEOUT=10`, `PWRSTAT_PATH=/usr/sbin/pwrstat`, `DEVICE_MODEL=EC850LCD`, discovery prefix `homeassistant`. `MQTT_URL` has no default and is required. |
+| Loop | Fixed-rate `time.Ticker`, made safe by `timeout + 2 s WaitDelay < interval`. |
+| Offline threshold | 3 consecutive failed samples (`offlineThreshold` in `cmd/ups-mqtt`). |
+| Availability | `sync/atomic.Bool`, because `OnConnectHandler` runs on paho's network goroutine and must republish the current state after a broker restart. |
+| Startup | One sample before the MQTT connect; `IsUnusable` exits non-zero, other errors start the counter at 1 and publish nothing. |
+| Payload | `strconv.FormatFloat(w, 'f', -1, 64)` — `66` stays `66`, `66.5` stays `66.5`. |
+| `expire_after` | `4 × POLL_INTERVAL` seconds, floored at 60. |
+| Ghost topics | The starter's `bridge_status` discovery config and state topic were deleted with empty retained payloads. |
 
 ## Rejected alternatives
 

@@ -1,3 +1,5 @@
+// Command ups-mqtt publishes the UPS load in watts to Home Assistant over MQTT
+// discovery.
 package main
 
 import (
@@ -17,6 +19,9 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
+// Availability payloads. They must match payload_available and
+// payload_not_available in the discovery payload, or the entity will never
+// report as available.
 const (
 	PayloadAvailable    = "online"
 	PayloadNotAvailable = "offline"
@@ -145,6 +150,9 @@ func readLoad(ctx context.Context, cfg config.Config) (string, error) {
 	return strconv.FormatFloat(watts, 'f', -1, 64), nil
 }
 
+// publish sends payload to topic at QoS 1. Transport failures are logged rather
+// than returned: they are paho's reconnect loop's problem and must not be
+// counted as UPS failures.
 func publish(client mqtt.Client, topic string, payload string, retained bool) {
 	token := client.Publish(topic, 1, retained, payload)
 	if !token.WaitTimeout(5 * time.Second) {
