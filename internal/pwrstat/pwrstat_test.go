@@ -334,3 +334,10 @@ func TestCollectCancelled(t *testing.T) {
 		t.Fatalf("error %q should mention cancellation", err)
 	}
 }
+
+// silent failure: exit non-zero without printing anything → final fallback
+func TestCollectSilentFailure(t *testing.T) {
+    path := writePwrstat(t, "exit 1\n")
+    _, err := Collect(context.Background(), path, 5*time.Second)
+    if err == nil || IsUnusable(err) { ... }
+}
