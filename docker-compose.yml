@@ -36,13 +36,15 @@ services:
     container_name: twilightzone-ups-mqtt
     # Dockhand writes plain stack vars to .env and encrypted ones to
     # .env.dockhand. Both are optional so the same file also runs locally, where
-    # neither exists. Without the second entry MQTT_USER/MQTT_PASS never reach
-    # the container and the broker rejects the client.
+    # neither exists. Interpolation must stay off: credentials can contain $
+    # sequences, which compose would otherwise expand and silently truncate.
     env_file:
       - path: .env
         required: false
+        interpolate: false
       - path: .env.dockhand
         required: false
+        interpolate: false
     restart: unless-stopped
     user: "0:0"
 
