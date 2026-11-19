@@ -56,6 +56,7 @@ class DteCoordinator(DataUpdateCoordinator[DteData]):
         self.entry = entry
         self.critical_dates = critical_dates
         self.last_import: datetime | None = None
+        self.has_electric: bool | None = None
 
     async def _async_update_data(self) -> DteData:
         try:
@@ -68,30 +69,36 @@ class DteCoordinator(DataUpdateCoordinator[DteData]):
         except DteParseError as err:
             raise UpdateFailed(str(err)) from err
 
-        if not feed.electric:
-            raise UpdateFailed("the feed has no electric interval readings")
+        if not feed.electric and not feed.gas:
+            raise UpdateFailed("the feed has no electric or gas interval readings")
 
+        self.has_electric = bool(feed.electric)
         import_result: ImportResult | None = None
         errors: list[str] = []
 
-        try:
-            import_result = await async_import_intervals(
-                self.hass, self.entry.entry_id, feed.electric, self.critical_dates
-            )
-        except Exception:  # noqa: BLE001 - keep the price sensors alive
-            _LOGGER.exception("Could not import DTE electric statistics")
-            errors.append("electric statistics import failed")
+        if feed.electric:
+            try:
+                import_result = await async_import_intervals(
+                    self.hass, self.entry.entry_id, feed.electric, self.critical_dates
+                )
+            except Exception:  # noqa: BLE001 - keep the price sensors alive
+                _LOGGER.exception("Could not import DTE electric statistics")
+                errors.append("electric statistics import failed")
 
-        try:
-            await async_import_gas(self.hass, self.entry.entry_id, feed.gas)
-        except Exception:  # noqa: BLE001 - gas is independent of the electric import
-            _LOGGER.exception("Could not import DTE gas statistics")
-            errors.append("gas statistics import failed")
+        if feed.gas:
+            try:
+                await async_import_gas(self.hass, self.entry.entry_id, feed.gas)
+            except Exception:  # noqa: BLE001 - gas is independent of the electric import
+                _LOGGER.exception("Could not import DTE gas statistics")
+                errors.append("gas statistics import failed")
 
         if not errors:
             self.last_import = dt_util.utcnow()
 
-        last_reading = feed.electric[-1].start
+        readings = [
+            series[-1].start for series in (feed.electric, feed.gas) if series
+        ]
+        last_reading = max(readings) if readings else None
         return DteData(
             intervals=feed.electric,
             last_reading=last_reading,

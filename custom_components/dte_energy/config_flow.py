@@ -27,8 +27,9 @@ from .const import (
     DEFAULT_SCAN_INTERVAL_HOURS,
     DOMAIN,
 )
-from .dte import DteParseError, parse_electric
+from .dte import DteParseError, parse_feed
 from .tariff import parse_critical_dates
+from .util import url_unique_id
 
 
 class CannotConnect(Exception):
@@ -58,15 +59,20 @@ async def _async_validate(hass: HomeAssistant, url: str) -> None:
         raise CannotConnect from err
 
     try:
-        await hass.async_add_executor_job(parse_electric, body)
+        feed = await hass.async_add_executor_job(parse_feed, body)
     except DteParseError as err:
         raise InvalidData from err
 
+    if not feed.electric and not feed.gas:
+        raise InvalidData
 
-def _unique_id(url: str) -> str:
-    parsed = urlparse(url)
-    token = parsed.path.rstrip("/").rsplit("/", 1)[-1]
-    return token.lower() if token else url.lower()
+
+def _url_schema(default_url: str = "") -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required(CONF_URL, default=default_url): TextSelector(),
+        }
+    )
 
 
 def _user_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
@@ -115,7 +121,7 @@ class DteEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
             except InvalidData:
                 errors["base"] = "invalid_data"
             else:
-                await self.async_set_unique_id(_unique_id(url))
+                await self.async_set_unique_id(url_unique_id(url))
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
                     title="DTE Energy",
@@ -132,6 +138,33 @@ class DteEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=_user_schema(user_input),
+            errors=errors,
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Update the share link without recreating the config entry."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            url = user_input[CONF_URL].strip()
+            try:
+                await _async_validate(self.hass, url)
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except InvalidData:
+                errors["base"] = "invalid_data"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={CONF_URL: url},
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_url_schema(entry.data.get(CONF_URL, "")),
             errors=errors,
         )
 

@@ -1,22 +1,30 @@
 {
   "config": {
+    "error": {
+      "cannot_connect": "Could not reach the DTE share link.",
+      "invalid_data": "That link did not return a usable DTE electric or gas usage feed."
+    },
+    "abort": {
+      "already_configured": "This DTE share link is already configured.",
+      "single_instance_allowed": "Only one DTE Energy usage entry is supported.",
+      "reconfigure_successful": "The DTE share link was updated."
+    },
     "step": {
       "user": {
         "title": "DTE Energy usage",
-        "description": "Paste the share link from DTE's Energy Usage Data page (usagedata.dteenergy.com). The integration imports the electric intervals as long-term statistics so the Energy dashboard can use them.",
+        "description": "Paste the share link from DTE's Energy Usage Data page (usage.dteenergy.com). The integration imports the electric and gas intervals as long-term statistics so the Energy dashboard can use them.",
         "data": {
           "url": "Share link",
           "scan_interval": "Update interval"
         }
+      },
+      "reconfigure": {
+        "title": "Update the DTE share link",
+        "description": "Paste a new share link. The integration keeps the same config entry, import history and statistics.",
+        "data": {
+          "url": "Share link"
+        }
       }
-    },
-    "error": {
-      "cannot_connect": "Could not reach the DTE share link.",
-      "invalid_data": "That link did not return a usable DTE electric usage feed."
-    },
-    "abort": {
-      "already_configured": "This DTE share link is already configured.",
-      "single_instance_allowed": "Only one DTE Energy usage entry is supported."
     }
   },
   "options": {

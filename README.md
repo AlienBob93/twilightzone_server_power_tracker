@@ -388,6 +388,18 @@ The monthly customer charge, IRM surcharge and sales tax are applied on the
 first imported day of each month. A day-one spike is expected; the monthly
 total is what matters.
 
+If the share link contains only a gas series, the electric price sensors are
+unavailable, but gas usage and cost still import normally.
+
+### Replacing an expired share link
+
+If DTE invalidates or regenerates the link, update it in place:
+
+**Settings → Devices & services → DTE Energy Usage → three-dot menu →
+Reconfigure**, then paste the new link. The config entry, import cursor and
+existing statistics are preserved; there is no need to delete and re-add the
+integration.
+
 ## 6. Optional rate chart
 
 The Energy dashboard charts cost, not the tariff. To see the rate steps, add a
@@ -454,7 +466,7 @@ customer charge; Meter Class II had a $55.00 customer charge.
 | Gas cost looks wrong on the 1st | The monthly fixed charge and tax are billed there. Look at the monthly total. |
 | Critical band is missing | Configure Dynamic Peak Pricing event dates, then wait for the re-cost. |
 | New data is missing | DTE posts with a one- to two-day lag. Check `sensor.dte_energy_last_reading`. |
-| Link rejected during setup | The URL must be an `https://…dteenergy.com` share link that returns the XML feed. Re-copy it from DTE. |
+| Link rejected during setup | The URL must be an `https://…dteenergy.com` share link that returns the XML feed. Re-copy it from DTE, or use **Reconfigure** to replace it in place. |
 | Gas rate does not match the bill | Check Rate A vs. 2A, GCR vs. GCC, and your county/city tax. Adjust `gas_tariff.py`. |
 
 ## Behaviour and caveats

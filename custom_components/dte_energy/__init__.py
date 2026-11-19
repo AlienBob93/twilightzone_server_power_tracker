@@ -11,15 +11,28 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_URL,
     DEFAULT_SCAN_INTERVAL_HOURS,
+    DOMAIN,
 )
 from .coordinator import DteCoordinator
 from .tariff import parse_critical_dates
+from .util import url_unique_id
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up DTE Energy usage from a config entry."""
+    # Older entries used the secret share token as their unique ID. Replace it
+    # with a hash without touching the entry ID, Store or statistics.
+    desired_unique_id = url_unique_id(entry.data[CONF_URL])
+    if entry.unique_id != desired_unique_id and not any(
+        other.entry_id != entry.entry_id and other.unique_id == desired_unique_id
+        for other in hass.config_entries.async_entries(DOMAIN)
+    ):
+        hass.config_entries.async_update_entry(
+            entry, unique_id=desired_unique_id
+        )
+
     critical_dates = parse_critical_dates(
         entry.options.get(CONF_CRITICAL_DATES, "")
     )
@@ -49,7 +62,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        coordinator = getattr(entry, "runtime_data", None)
+        if coordinator is not None:
+            await coordinator.async_shutdown()
+    return unloaded
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

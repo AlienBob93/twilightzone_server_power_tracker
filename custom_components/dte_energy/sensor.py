@@ -68,8 +68,8 @@ class DteTimeSensor(SensorEntity):
 
     @property
     def available(self) -> bool:
-        """The tariff is computed locally, so keep the sensor available."""
-        return True
+        """The tariff is computed locally; hide it for a gas-only feed."""
+        return self.coordinator.has_electric is not False
 
 
 class DtePriceSensor(DteTimeSensor):
