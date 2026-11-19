@@ -1,7 +1,9 @@
 {
   "domain": "dte_energy",
   "name": "DTE Energy Usage",
-  "codeowners": [],
+  "codeowners": [
+    "@AlienBob93"
+  ],
   "config_flow": true,
   "dependencies": [
     "recorder"
