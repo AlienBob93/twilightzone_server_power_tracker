@@ -276,10 +276,131 @@ This is how the starter's ghost topics
 Home Assistant after its discovery topic is deleted, delete it from the MQTT
 entity registry.
 
+## DTE Energy usage in Home Assistant
+
+The Go bridge deliberately publishes only the UPS load. A separate custom
+integration, [`custom_components/dte_energy`](custom_components/dte_energy),
+brings DTE's whole-home electric usage into Home Assistant and prices it with
+the residential time-of-day tariff. The UPS load sensor is not priced by this
+integration; it remains a separate power sensor.
+
+The DTE share link is a Green Button file with hourly kWh and no prices. The
+integration parses it and writes **two external statistics** into the recorder:
+
+| Statistic | Unit | Purpose |
+| --- | --- | --- |
+| `dte_energy:grid_consumption` | kWh | Grid consumption for the Energy dashboard |
+| `dte_energy:grid_cost` | USD | Cost per interval at the applicable tariff |
+
+A cost statistic is required: Home Assistant refuses to price **external**
+statistics from an entity, so the integration computes the cost itself. Both
+series are cumulative `sum` statistics with one row per meter interval, and
+the full history in the link is backfilled on first setup.
+
+### Tariff modelled
+
+All times are `America/Detroit`; weekdays are Monday–Friday and DTE's
+designated holidays are off-peak.
+
+| Plan | In effect | Band | Hours | Rate |
+| --- | --- | --- | --- | --- |
+| Dynamic Peak Pricing | through 2026-12-08 | off-peak | 23:00–07:00 | 14.31¢/kWh |
+| | | mid-peak | 07:00–15:00, 19:00–23:00 | 18.61¢/kWh |
+| | | peak | 15:00–19:00 | 26.92¢/kWh |
+| | | critical | 15:00–19:00, event days | $1.05/kWh |
+| Time of Day 3–7 p.m. | from 2026-12-09 | off-peak | all other hours | 18.44¢/kWh |
+| | | peak (summer) | 15:00–19:00, Jun 1–Sep 30 | 24.13¢/kWh |
+| | | peak (non-summer) | 15:00–19:00, Oct 1–May 31 | 20.05¢/kWh |
+
+The rates are base energy rates: PSCR, taxes, program fees and other surcharges
+are not included, so the dashboard cost is lower than the billed amount.
+
+### Install
+
+1. Copy `custom_components/dte_energy` into your Home Assistant `config`
+   directory, or add this repository as a HACS custom repository. Restart Home
+   Assistant.
+2. **Settings → Devices & services → Add integration → DTE Energy Usage**.
+3. Paste the share link from DTE's Energy Usage Data page.
+4. Optional: open the integration's **Configure** dialog to set a different
+   polling interval and the Dynamic Peak Pricing **critical-event dates**.
+   Without those dates, event hours are priced at the normal peak rate.
+
+### Energy dashboard
+
+1. **Settings → Dashboards → Energy → Electricity grid → Add grid connection**.
+2. Select the consumption statistic **DTE electric grid consumption**
+   (`dte_energy:grid_consumption`).
+3. Under cost, choose **Use an entity tracking the total costs** and select
+   **DTE electric grid cost** (`dte_energy:grid_cost`).
+4. Save.
+
+The picker searches statistics by ID, not display name. If the names are not
+found, type `grid_consumption` or `grid_cost`. The price sensor is only for
+charts and automations; the dashboard cost option must use the cost statistic.
+
+The dashboard now shows both energy and cost for the whole history in the feed.
+Because cost is priced per interval, the 3–7 p.m. bars are visibly more
+expensive than off-peak bars, and the rate change on 2026-12-09 appears in the
+cost series.
+
+### Visualising the price itself
+
+The Energy dashboard charts cost, not the tariff. To see the rate steps, use
+the price sensor, which is available immediately and updates on the hour:
+
+```yaml
+type: statistics-graph
+title: DTE electricity price
+chart_type: line
+period: hour
+days_to_show: 3
+entities:
+  - entity: sensor.dte_energy_current_price
+```
+
+`0.2692` USD/kWh is the Dynamic Peak Pricing peak rate; the `cents_per_kwh`
+attribute carries `26.92`. After 2026-12-09 the same sensor reports the Time of
+Day peak rate (0.2005 in winter, 0.2413 in summer). The current band and the
+next boundary are also exposed:
+
+| Entity | Meaning |
+| --- | --- |
+| `sensor.dte_energy_current_price` | Current rate in USD/kWh |
+| `sensor.dte_energy_current_band` | `off_peak`, `mid_peak`, `peak`, `critical` |
+| `sensor.dte_energy_next_rate_change` | Next tariff boundary |
+| `sensor.dte_energy_last_reading` | Newest interval in the DTE feed (diagnostic) |
+| `sensor.dte_energy_last_import` | Last successful statistics import (diagnostic) |
+
+### Behaviour and caveats
+
+- DTE posts readings with a one- to two-day lag, so the newest day is usually
+  missing; the integration polls every six hours by default.
+- Readings marked by DTE as estimates can be revised. The last three days are
+  re-imported on every poll so the running sums pick up corrections; older
+  revisions are ignored.
+- Changing the critical-event dates (or bumping `TARIFF_VERSION` after editing
+  a rate) triggers a full re-cost of the feed. Keep the share link valid long
+  enough for that.
+- The feed's gas series (CCF) is ignored; the tariff is electric-only.
+- The integration writes statistics for the whole feed on first setup (about
+  14 months, 10,000 hourly rows in the current export).
+- The share link grants read access to the household's usage history. It is
+  stored in the config entry; treat it as a secret.
+
+Tests for the parser and tariff logic are standalone and need no Home
+Assistant install:
+
+```sh
+python3 -m unittest discover -s tests
+```
+
 ## Out of scope
 
 Battery capacity, runtime, state flags, test results, outage history, thresholds
-and energy accounting are deliberately not implemented. Two findings from the
-hardware make some of them pointless anyway: `Test Result` never populates on
-this model, and `State` was only ever observed as `Normal` — a self-test that ran
-the load on battery left no trace in the status output or the daemon log.
+and energy accounting are deliberately not implemented **in the Go bridge**.
+Two findings from the hardware make some of them pointless anyway: `Test
+Result` never populates on this model, and `State` was only ever observed as
+`Normal` — a self-test that ran the load on battery left no trace in the status
+output or the daemon log. Whole-home energy accounting is handled by the DTE
+integration above instead.

@@ -4,6 +4,10 @@
 # Build output
 /bin/
 
+# Python
+__pycache__/
+*.py[cod]
+
 # Editor and OS noise
 .DS_Store
 *.swp

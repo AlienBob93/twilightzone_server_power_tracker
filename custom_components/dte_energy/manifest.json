@@ -1,0 +1,15 @@
+{
+  "domain": "dte_energy",
+  "name": "DTE Energy Usage",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": [
+    "recorder"
+  ],
+  "documentation": "https://github.com/AlienBob93/twilightzone_server_power_tracker",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/AlienBob93/twilightzone_server_power_tracker/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

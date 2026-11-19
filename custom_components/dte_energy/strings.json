@@ -1,0 +1,56 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "DTE Energy usage",
+        "description": "Paste the share link from DTE's Energy Usage Data page (usagedata.dteenergy.com). The integration imports the electric intervals as long-term statistics so the Energy dashboard can use them.",
+        "data": {
+          "url": "Share link",
+          "scan_interval": "Update interval"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the DTE share link.",
+      "invalid_data": "That link did not return a usable DTE electric usage feed."
+    },
+    "abort": {
+      "already_configured": "This DTE share link is already configured.",
+      "single_instance_allowed": "Only one DTE Energy usage entry is supported."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "DTE Energy usage options",
+        "description": "Critical-event dates apply to Dynamic Peak Pricing and are ignored from 2026-12-09. Enter ISO dates separated by commas ({critical_hint}).",
+        "data": {
+          "scan_interval": "Update interval",
+          "critical_dates": "Critical peak event dates"
+        }
+      }
+    },
+    "error": {
+      "invalid_critical_dates": "Use comma-separated ISO dates, for example 2026-07-15, 2026-08-12."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "current_price": {
+        "name": "Current price"
+      },
+      "current_band": {
+        "name": "Current rate period"
+      },
+      "next_rate_change": {
+        "name": "Next rate change"
+      },
+      "last_reading": {
+        "name": "Last reading"
+      },
+      "last_import": {
+        "name": "Last import"
+      }
+    }
+  }
+}
