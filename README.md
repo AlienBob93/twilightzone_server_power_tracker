@@ -138,8 +138,10 @@ The container bind-mounts:
 - `/usr/sbin/pwrstat` from the host, read-only, over `PWRSTAT_PATH`.
 - `/var/pwrstatd.ipc` from the host, read-write. A unix socket inside a
   read-only mount cannot be connected to on some kernels.
-- `.env` and, if it exists, `.env.dockhand`. Dockhand writes the latter; it is
-  optional, so the same compose file also runs without it.
+
+Compose reads `.env` and, if it exists, `.env.dockhand` as environment files.
+Dockhand writes the latter; it is optional, so the same compose file also runs
+without it.
 
 The base image is pinned to `ubuntu:26.04` because the vendor CLI is
 dynamically linked against that libc. Do not replace it with an older Ubuntu or
@@ -153,7 +155,8 @@ new as the host's.
    `twilightzone_ups`) with one entity (`sensor.twilightzone_ups_load`).
 2. Open **Settings → Devices & services → MQTT → Configure → Listen to a
    topic** and subscribe to `twilightzone/ups/#`. With the defaults you should
-   see three retained messages: the discovery config, availability and load.
+   see two retained messages there: availability and load. The discovery config
+   is under `homeassistant/sensor/twilightzone_ups/load/config`.
 3. Check the container:
 
 ```sh
@@ -230,7 +233,32 @@ and the container becomes unhealthy.
 If those restarts are unacceptable, run the same binary directly on the host
 under systemd as root, with `After=pwrstatd.service`, an `EnvironmentFile=` and
 `Restart=on-failure`. That removes the mount, the glibc coupling and the stale
-socket problem.
+socket problem. For example:
+
+```ini
+[Unit]
+Description=Twilight Zone UPS MQTT bridge
+After=pwrstatd.service
+Requires=pwrstatd.service
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/twilightzone-ups.env
+ExecStart=/usr/local/bin/ups-mqtt
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```sh
+go build -o ups-mqtt ./cmd/ups-mqtt
+sudo install -m 0755 ups-mqtt /usr/local/bin/ups-mqtt
+sudo systemctl daemon-reload
+sudo systemctl enable --now ups-mqtt.service
+```
 
 ### Automated deploy (optional)
 
@@ -274,7 +302,7 @@ Entities:
 | Entity | Meaning |
 | --- | --- |
 | `sensor.dte_energy_current_price` | Current electric rate in USD/kWh |
-| `sensor.dte_energy_current_band` | `off_peak`, `mid_peak`, `peak` or `critical` |
+| `sensor.dte_energy_current_rate_period` | `off_peak`, `mid_peak`, `peak` or `critical` |
 | `sensor.dte_energy_next_rate_change` | Next tariff boundary |
 | `sensor.dte_energy_last_reading` | Newest interval in the DTE feed (diagnostic) |
 | `sensor.dte_energy_last_import` | Last successful statistics import (diagnostic) |
@@ -300,6 +328,9 @@ is backfilled on first setup.
    copy the link. It is a Green Button XML feed.
 3. Treat the link as a secret: anyone who has it can read your usage history.
 
+The portal is `usage.dteenergy.com`; the generated share links are on
+`usagedata.dteenergy.com/link/…`.
+
 The feed contains hourly electric kWh and daily gas CCF. It does **not** contain
 prices; the integration applies the tariffs locally.
 
@@ -322,7 +353,7 @@ prices; the integration applies the tariffs locally.
 
 HACS is replaced by the Marketplace in Home Assistant 2026.11, so this path is
 only for older installations. The integration itself needs Home Assistant
-2025.10 or newer.
+2025.11 or newer.
 
 ### Manual
 
@@ -416,7 +447,7 @@ entities:
 ```
 
 For exact one-hour steps, use `history-graph` with `current_price` or
-`current_band`.
+`current_rate_period`.
 
 ## Rates and how to update them
 
@@ -433,7 +464,10 @@ weekdays and off-peak at all other times. All times are `America/Detroit`;
 weekends and DTE's designated holidays are off-peak.
 
 The electric table is in
-[`tariff.py`](custom_components/dte_energy/tariff.py). The gas table is in
+[`tariff.py`](custom_components/dte_energy/tariff.py). It follows DTE's
+residential time-of-day plans; verify the effective dates and values against
+[DTE's Electric Pricing Options](https://www.dteenergy.com/us/en/residential/service-request/pricing/rate-options/residential-pricing-options.html)
+and your bill before relying on the cost series. The gas table is in
 [`gas_tariff.py`](custom_components/dte_energy/gas_tariff.py) and defaults to
 **DTE Gas Rate A / GCR** from the November 2026 rate card, with the 4% Michigan
 sales tax and no City of Detroit utility users tax. The November 2026 Rate A
@@ -475,8 +509,8 @@ customer charge; Meter Class II had a $55.00 customer charge.
   six hours by default.
 - DTE can revise estimated readings. The last three days are re-imported on
   every poll; older revisions are ignored.
-- The integration backfills the whole feed on first setup (about 14 months in
-  the current export).
+- The integration backfills the whole feed on first setup (about 13–14 months,
+  depending on the share link).
 - Version 0.5.0 performs a one-time full re-import of electric and gas to remove
   rows left by earlier rebuilds. A full rebuild clears the affected statistics
   first, so rows older than the current feed are removed.
