@@ -18,9 +18,11 @@ running sums.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 import logging
+import math
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import (
@@ -31,6 +33,8 @@ from homeassistant.components.recorder.models import (
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     clear_statistics,
+    clear_statistics_range,
+    get_last_statistics,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
@@ -59,13 +63,19 @@ OVERLAP = timedelta(days=3)
 KEEP = timedelta(days=14)
 
 GAS_STORE_VERSION = 1
-GAS_SCHEMA_VERSION = 2
+GAS_SCHEMA_VERSION = 3
 GAS_OVERLAP = timedelta(days=3)
 GAS_KEEP = timedelta(days=14)
 
+# The recorder imports statistics asynchronously; the Store cursor is only
+# advanced after the last row is visible in the long-term statistics database.
+CONFIRM_TIMEOUT = 180.0
+CONFIRM_INITIAL_DELAY = 0.25
+CONFIRM_MAX_DELAY = 2.0
+
 # Bump when the persisted import state changes shape, or when rates/band rules
 # in tariff.py change, so the whole feed is re-costed.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 TARIFF_VERSION = 1
 
 
@@ -249,12 +259,10 @@ async def async_import_intervals(
     full_rebuild = tariff_changed or dates_changed
 
     if raw_state.get("last_start") and full_rebuild:
-        if tariff_changed:
-            # Band membership can change with the rules; rebuild all bands.
-            await _async_clear_statistics(hass, list(BAND_LABELS))
-        else:
-            # Critical hours replace peak hours, so both series are rebuilt.
-            await _async_clear_statistics(hass, ["peak", "critical"])
+        # Rebuild every electric series, including the combined pair: a removed
+        # critical date changes the combined cost, and a rolled feed can leave
+        # stale cumulative rows outside the new feed.
+        await _async_clear_statistics(hass, _electric_stat_ids())
 
     if full_rebuild:
         state = ImportState()
@@ -285,6 +293,16 @@ async def async_import_intervals(
             state.energy_sum,
             state.cost_sum,
             last_reading,
+        )
+
+    if anchor is not None:
+        # Re-importing the overlap must also remove rows DTE dropped or moved;
+        # an upsert alone leaves them behind and breaks the cumulative sums.
+        await _async_clear_range(
+            hass,
+            _electric_stat_ids(),
+            anchor.start + timedelta(hours=1),
+            rows[-1].start + timedelta(hours=1),
         )
 
     energy_rows: list[StatisticData] = []
@@ -336,6 +354,11 @@ async def async_import_intervals(
             )
         )
 
+    expected: list[tuple[str, datetime, float]] = [
+        (ENERGY_STAT_ID, rows[-1].start, energy_total),
+        (COST_STAT_ID, rows[-1].start, cost_total),
+    ]
+
     async_add_external_statistics(
         hass,
         _metadata(ENERGY_STAT_ID, ENERGY_STAT_NAME, "kWh", "energy"),
@@ -359,6 +382,13 @@ async def async_import_intervals(
             ),
             band_rows,
         )
+        expected.append(
+            (
+                f"{DOMAIN}:{band}_consumption",
+                band_rows[-1]["start"],
+                band_rows[-1]["sum"],
+            )
+        )
     for band, band_rows in band_cost_rows.items():
         label = BAND_LABELS[band]
         async_add_external_statistics(
@@ -371,6 +401,17 @@ async def async_import_intervals(
             ),
             band_rows,
         )
+        expected.append(
+            (
+                f"{DOMAIN}:{band}_cost",
+                band_rows[-1]["start"],
+                band_rows[-1]["sum"],
+            )
+        )
+
+    # The recorder only queues the import. Wait until the last rows are visible
+    # before advancing the Store cursor, otherwise a crash can skip history.
+    await _async_confirm_statistics(hass, expected)
 
     state.last_start = rows[-1].start
     state.energy_sum = energy_total
@@ -432,8 +473,15 @@ async def async_import_gas(
         return 0
 
     store = Store(hass, GAS_STORE_VERSION, f"{DOMAIN}.{entry_id}.gas_state")
-    state = GasState.from_dict(await store.async_load() or {})
-    if state.tariff_version != GAS_TARIFF_VERSION:
+    raw_state = await store.async_load() or {}
+    state = GasState.from_dict(raw_state)
+    gas_rebuild = (
+        state.tariff_version != GAS_TARIFF_VERSION
+        or raw_state.get("schema") != GAS_SCHEMA_VERSION
+    )
+    if gas_rebuild:
+        if raw_state.get("last_start"):
+            await _async_clear_statistics(hass, _gas_stat_ids())
         # Rates or fixed charges changed; rebuild the whole gas history.
         state = GasState()
 
@@ -460,6 +508,14 @@ async def async_import_gas(
     ]
     if not rows:
         return 0
+
+    if anchor is not None and after is not None:
+        await _async_clear_range(
+            hass,
+            _gas_stat_ids(),
+            after + timedelta(hours=1),
+            rows[-1].start + timedelta(hours=1),
+        )
 
     usage_stats: list[StatisticData] = []
     cost_stats: list[StatisticData] = []
@@ -489,6 +545,14 @@ async def async_import_gas(
         hass,
         _metadata(GAS_COST_STAT_ID, GAS_COST_STAT_NAME, "USD", None),
         cost_stats,
+    )
+
+    await _async_confirm_statistics(
+        hass,
+        [
+            (GAS_STAT_ID, rows[-1].start, total),
+            (GAS_COST_STAT_ID, rows[-1].start, cost_total),
+        ],
     )
 
     state.last_start = rows[-1].start
@@ -598,16 +662,99 @@ def _merge_gas_checkpoints(
     )
 
 
-async def _async_clear_statistics(hass: HomeAssistant, bands: list[str]) -> None:
-    """Clear the per-band statistics before rebuilding them."""
-    statistic_ids = [
-        f"{DOMAIN}:{band}_{kind}" for band in bands for kind in ("consumption", "cost")
-    ]
+def _electric_stat_ids() -> list[str]:
+    """Return every electric statistic, including the combined pair."""
+    statistic_ids = [ENERGY_STAT_ID, COST_STAT_ID]
+    for band in BAND_LABELS:
+        statistic_ids.extend(
+            [f"{DOMAIN}:{band}_consumption", f"{DOMAIN}:{band}_cost"]
+        )
+    return statistic_ids
+
+
+def _gas_stat_ids() -> list[str]:
+    """Return the gas statistics."""
+    return [GAS_STAT_ID, GAS_COST_STAT_ID]
+
+
+async def _async_clear_statistics(
+    hass: HomeAssistant, statistic_ids: list[str]
+) -> None:
+    """Delete statistics and their metadata before a full rebuild.
+
+    Failures are propagated: advancing the Store while old rows remain would
+    make the cumulative series non-monotonic.
+    """
     instance = get_instance(hass)
-    try:
-        await hass.async_add_executor_job(clear_statistics, instance, statistic_ids)
-    except Exception:  # noqa: BLE001 - a failed clear must not stop the import
-        _LOGGER.exception("Could not clear statistics for %s", ", ".join(bands))
+    await hass.async_add_executor_job(clear_statistics, instance, statistic_ids)
+
+
+async def _async_clear_range(
+    hass: HomeAssistant,
+    statistic_ids: list[str],
+    start: datetime,
+    end: datetime,
+) -> None:
+    """Delete rows in an overlap window before re-importing it.
+
+    Upserts alone cannot remove a reading DTE dropped or moved to another
+    timestamp; deleting the window first keeps the cumulative sums honest.
+    """
+    instance = get_instance(hass)
+    await hass.async_add_executor_job(
+        clear_statistics_range, instance, statistic_ids, start, end
+    )
+
+
+async def _async_confirm_statistics(
+    hass: HomeAssistant,
+    expected: list[tuple[str, datetime, float]],
+    timeout: float | None = None,
+) -> None:
+    """Wait until every expected last row is visible in the statistics DB.
+
+    ``async_add_external_statistics`` only queues the write. The Store cursor is
+    not advanced until the recorder has committed the rows, so a crash cannot
+    skip the uncommitted part of the history.
+    """
+    if not expected:
+        return
+
+    timeout = CONFIRM_TIMEOUT if timeout is None else timeout
+    instance = get_instance(hass)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    delay = CONFIRM_INITIAL_DELAY
+
+    while True:
+        missing: list[str] = []
+        for statistic_id, start, expected_sum in expected:
+            rows = await instance.async_add_executor_job(
+                get_last_statistics, hass, 1, statistic_id, True, {"sum"}
+            )
+            row = next(iter(rows.get(statistic_id, [])), None)
+            if (
+                row is None
+                or abs(row["start"] - start.timestamp()) > 0.5
+                or not math.isclose(
+                    row.get("sum") or 0.0,
+                    expected_sum,
+                    rel_tol=1e-9,
+                    abs_tol=1e-6,
+                )
+            ):
+                missing.append(statistic_id)
+
+        if not missing:
+            return
+
+        if loop.time() >= deadline:
+            raise RuntimeError(
+                "recorder did not confirm statistics: " + ", ".join(missing)
+            )
+
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, CONFIRM_MAX_DELAY)
 
 
 def _bands_to_json(bands: dict[str, tuple[float, float]]) -> dict[str, list[float]]:

@@ -337,7 +337,9 @@ and restart Home Assistant.
    to add Dynamic Peak Pricing **critical-event dates**.
 
 Without critical-event dates, event hours are priced at the normal peak rate.
-Adding or changing dates triggers a full re-cost of the electric history.
+Adding or changing dates clears the electric statistics and re-imports the
+feed's full history. If DTE's feed window has rolled forward, rows older than
+the current feed are removed, because they cannot be re-costed.
 
 ## 4. Energy dashboard: electricity
 
@@ -433,7 +435,8 @@ If your rate schedule, effective dates, county tax or gas supplier differs:
 2. Bump `TARIFF_VERSION` (electric) or `GAS_TARIFF_VERSION` (gas).
 3. Restart the integration.
 
-The bump makes the integration re-cost the full history. Electric rates are
+The bump clears the affected statistics and re-costs the feed's full history.
+Electric rates are
 base rates and exclude PSCR, taxes and program fees; gas includes the 4% sales
 tax because it is a single known rate. Verify against your bill.
 
@@ -462,6 +465,9 @@ customer charge; Meter Class II had a $55.00 customer charge.
   every poll; older revisions are ignored.
 - The integration backfills the whole feed on first setup (about 14 months in
   the current export).
+- Version 0.5.0 performs a one-time full re-import of electric and gas to remove
+  rows left by earlier rebuilds. A full rebuild clears the affected statistics
+  first, so rows older than the current feed are removed.
 - The share link grants read access to your usage history. It is stored in the
   config entry; treat it as a secret.
 - The integration is DTE-specific. The UPS bridge is not.
