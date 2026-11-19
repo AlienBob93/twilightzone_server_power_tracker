@@ -37,9 +37,30 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+  python:
+    runs-on: ubuntu-latest
+    # The Python suite is stdlib-only and stubs Home Assistant, so there is
+    # nothing to install. No OIDC token is needed.
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Compile
+        run: python -m compileall -q custom_components tests
+
+      - name: Test
+        run: python -m unittest discover -s tests -v
+
   deploy:
-    # A red suite means the image never reaches Dockhand.
-    needs: test
+    # A red Go or Python suite means the image never reaches Dockhand.
+    needs: [test, python]
     runs-on: ubuntu-latest
     concurrency:
       group: dockhand-deploy-ups-mqtt

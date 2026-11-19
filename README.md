@@ -262,10 +262,10 @@ sudo systemctl enable --now ups-mqtt.service
 
 ### Automated deploy (optional)
 
-The repository's GitHub Actions workflow runs `go vet ./...` and
-`go test -race ./...`, then optionally triggers a Dockhand stack webhook. If you
-do not use Dockhand, delete or adapt the `deploy` job; the UPS bridge does not
-need CI.
+The repository's GitHub Actions workflow runs `go vet ./...`,
+`go test -race ./...` and the Python suite, then optionally triggers a Dockhand
+stack webhook. If you do not use Dockhand, delete or adapt the `deploy` job; the
+UPS bridge does not need CI.
 
 ---
 
@@ -543,7 +543,8 @@ python3 -m unittest discover -s tests
 
 The Go suite uses real `pwrstat` fixtures and a fake CLI, so no UPS, daemon or
 broker is needed. The Python suite is standalone and needs no Home Assistant
-install.
+install. The GitHub Actions workflow runs both suites on every push to
+`mqtt-ha-integration`, and the deploy job waits for both.
 
 # Design notes
 
