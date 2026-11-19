@@ -43,8 +43,10 @@ from .const import (
     DOMAIN,
     ENERGY_STAT_ID,
     ENERGY_STAT_NAME,
+    GAS_STAT_ID,
+    GAS_STAT_NAME,
 )
-from .dte import ElectricInterval
+from .dte import ElectricInterval, GasInterval
 from .tariff import TZ, rate_at
 
 _LOGGER = logging.getLogger(__name__)
@@ -52,6 +54,11 @@ _LOGGER = logging.getLogger(__name__)
 STORE_VERSION = 1
 OVERLAP = timedelta(days=3)
 KEEP = timedelta(days=14)
+
+GAS_STORE_VERSION = 1
+GAS_SCHEMA_VERSION = 1
+GAS_OVERLAP = timedelta(days=3)
+GAS_KEEP = timedelta(days=14)
 
 # Bump when the persisted import state changes shape, or when rates/band rules
 # in tariff.py change, so the whole feed is re-costed.
@@ -145,6 +152,49 @@ class ImportState:
             ],
             "tariff_version": self.tariff_version,
             "critical_dates": self.critical_dates,
+        }
+
+
+@dataclass(slots=True)
+class GasState:
+    """Persisted gas import cursor and cumulative total."""
+
+    last_start: datetime | None = None
+    total: float = 0.0
+    checkpoints: list[tuple[datetime, float]] = field(default_factory=list)
+    schema: int = GAS_SCHEMA_VERSION
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "GasState":
+        if data.get("schema") != GAS_SCHEMA_VERSION:
+            return cls()
+
+        checkpoints: list[tuple[datetime, float]] = []
+        for item in data.get("checkpoints", []):
+            try:
+                checkpoints.append(
+                    (datetime.fromisoformat(item[0]), float(item[1]))
+                )
+            except (TypeError, ValueError, IndexError):
+                continue
+
+        last_start = data.get("last_start")
+
+        return cls(
+            last_start=datetime.fromisoformat(last_start) if last_start else None,
+            total=float(data.get("total") or 0),
+            checkpoints=checkpoints,
+            schema=GAS_SCHEMA_VERSION,
+        )
+
+    def as_dict(self) -> dict:
+        return {
+            "schema": self.schema,
+            "last_start": self.last_start.isoformat() if self.last_start else None,
+            "total": self.total,
+            "checkpoints": [
+                [start.isoformat(), total] for start, total in self.checkpoints
+            ],
         }
 
 
@@ -336,6 +386,85 @@ async def async_import_intervals(
     )
 
 
+async def async_import_gas(
+    hass: HomeAssistant,
+    entry_id: str,
+    intervals: list[GasInterval],
+    now: datetime | None = None,
+) -> int:
+    """Import daily gas usage into a long-term statistic.
+
+    Each daily reading is placed at the local start of its day (midnight), which
+    is top-of-hour in UTC. Home Assistant stores hourly statistics, so the daily
+    total is one row; the Energy dashboard's daily gas buckets sum it correctly.
+    """
+    now = now or dt_util.utcnow()
+
+    complete = sorted(
+        (
+            interval
+            for interval in intervals
+            if interval.end <= now
+            and interval.start.minute == 0
+            and interval.start.second == 0
+            and interval.start.microsecond == 0
+        ),
+        key=lambda interval: interval.start,
+    )
+    if not complete:
+        return 0
+
+    store = Store(hass, GAS_STORE_VERSION, f"{DOMAIN}.{entry_id}.gas_state")
+    state = GasState.from_dict(await store.async_load() or {})
+
+    anchor = _select_gas_anchor(state, complete)
+    if anchor is None:
+        after: datetime | None = None
+        total = 0.0
+    else:
+        after, total = anchor
+
+    rows = [
+        interval for interval in complete if after is None or interval.start > after
+    ]
+    if not rows:
+        return 0
+
+    stats: list[StatisticData] = []
+    checkpoints: list[tuple[datetime, float]] = []
+
+    for interval in rows:
+        total += interval.ccf
+        stats.append(
+            StatisticData(start=interval.start, state=interval.ccf, sum=total)
+        )
+        checkpoints.append((interval.start, total))
+
+    async_add_external_statistics(
+        hass,
+        _metadata(GAS_STAT_ID, GAS_STAT_NAME, "CCF", "volume"),
+        stats,
+    )
+
+    state.last_start = rows[-1].start
+    state.total = total
+    state.checkpoints = _merge_gas_checkpoints(
+        state.checkpoints, checkpoints, state.last_start
+    )
+    state.schema = GAS_SCHEMA_VERSION
+    await store.async_save(state.as_dict())
+
+    _LOGGER.debug(
+        "Imported %d DTE gas intervals (%s .. %s); %.3f CCF",
+        len(rows),
+        rows[0].start.isoformat(),
+        rows[-1].start.isoformat(),
+        total,
+    )
+
+    return len(rows)
+
+
 def _select_anchor(
     state: ImportState, intervals: list[ElectricInterval]
 ) -> Checkpoint | None:
@@ -381,6 +510,43 @@ def _merge_checkpoints(
     return sorted(
         (checkpoint for checkpoint in merged.values() if checkpoint.start >= keep_from),
         key=lambda checkpoint: checkpoint.start,
+    )
+
+
+def _select_gas_anchor(
+    state: GasState, intervals: list[GasInterval]
+) -> tuple[datetime, float] | None:
+    """Pick the gas cumulative anchor to re-import from."""
+    if state.last_start is None:
+        return None
+
+    target = state.last_start - GAS_OVERLAP
+    candidates = [
+        checkpoint for checkpoint in state.checkpoints if checkpoint[0] <= target
+    ]
+
+    if candidates:
+        anchor = max(candidates, key=lambda checkpoint: checkpoint[0])
+        if intervals and anchor[0] >= intervals[0].start:
+            return anchor
+
+    return (state.last_start, state.total)
+
+
+def _merge_gas_checkpoints(
+    existing: list[tuple[datetime, float]],
+    new: list[tuple[datetime, float]],
+    last_start: datetime,
+) -> list[tuple[datetime, float]]:
+    """Merge gas checkpoints, keeping the most recent ones only."""
+    merged = {start: (start, total) for start, total in existing}
+    for start, total in new:
+        merged[start] = (start, total)
+
+    keep_from = last_start - GAS_KEEP
+    return sorted(
+        (checkpoint for checkpoint in merged.values() if checkpoint[0] >= keep_from),
+        key=lambda checkpoint: checkpoint[0],
     )
 
 

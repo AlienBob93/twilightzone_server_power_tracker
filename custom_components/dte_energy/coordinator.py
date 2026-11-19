@@ -16,8 +16,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
-from .dte import DteParseError, ElectricInterval, parse_electric
-from .statistics import ImportResult, async_import_intervals
+from .dte import DteParseError, ElectricInterval, parse_feed
+from .statistics import ImportResult, async_import_gas, async_import_intervals
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,28 +64,39 @@ class DteCoordinator(DataUpdateCoordinator[DteData]):
             raise UpdateFailed(f"could not fetch DTE share link: {err}") from err
 
         try:
-            intervals = await self.hass.async_add_executor_job(parse_electric, body)
+            feed = await self.hass.async_add_executor_job(parse_feed, body)
         except DteParseError as err:
             raise UpdateFailed(str(err)) from err
 
+        if not feed.electric:
+            raise UpdateFailed("the feed has no electric interval readings")
+
         import_result: ImportResult | None = None
-        import_error: str | None = None
+        errors: list[str] = []
 
         try:
             import_result = await async_import_intervals(
-                self.hass, self.entry.entry_id, intervals, self.critical_dates
+                self.hass, self.entry.entry_id, feed.electric, self.critical_dates
             )
-            self.last_import = dt_util.utcnow()
         except Exception:  # noqa: BLE001 - keep the price sensors alive
-            _LOGGER.exception("Could not import DTE statistics")
-            import_error = "statistics import failed"
+            _LOGGER.exception("Could not import DTE electric statistics")
+            errors.append("electric statistics import failed")
 
-        last_reading = intervals[-1].start if intervals else None
+        try:
+            await async_import_gas(self.hass, self.entry.entry_id, feed.gas)
+        except Exception:  # noqa: BLE001 - gas is independent of the electric import
+            _LOGGER.exception("Could not import DTE gas statistics")
+            errors.append("gas statistics import failed")
+
+        if not errors:
+            self.last_import = dt_util.utcnow()
+
+        last_reading = feed.electric[-1].start
         return DteData(
-            intervals=intervals,
+            intervals=feed.electric,
             last_reading=last_reading,
             import_result=import_result,
-            import_error=import_error,
+            import_error="; ".join(errors) or None,
         )
 
     async def _async_fetch(self) -> bytes:

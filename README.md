@@ -280,13 +280,14 @@ entity registry.
 
 The Go bridge deliberately publishes only the UPS load. A separate custom
 integration, [`custom_components/dte_energy`](custom_components/dte_energy),
-brings DTE's whole-home electric usage into Home Assistant and prices it with
-the residential time-of-day tariff. The UPS load sensor is not priced by this
-integration; it remains a separate power sensor.
+brings DTE's whole-home electric usage and daily gas usage into Home Assistant
+and prices the electric side with the residential time-of-day tariff. The UPS
+load sensor is not priced by this integration; it remains a separate power
+sensor.
 
-The DTE share link is a Green Button file with hourly kWh and no prices. The
-integration parses it and writes a combined series plus one pair per tariff
-band:
+The DTE share link is a Green Button file with hourly electric kWh, daily gas
+CCF and no prices. The integration parses it and writes a combined series plus
+one pair per electric tariff band:
 
 | Statistic | Unit | Purpose |
 | --- | --- | --- |
@@ -296,6 +297,7 @@ band:
 | `dte_energy:mid_peak_consumption` / `_cost` | kWh / USD | Mid-peak intervals (Dynamic Peak Pricing history) |
 | `dte_energy:peak_consumption` / `_cost` | kWh / USD | Peak intervals |
 | `dte_energy:critical_consumption` / `_cost` | kWh / USD | Critical-event intervals; only created once event dates are configured |
+| `dte_energy:gas_consumption` | CCF | Daily gas usage, placed at local midnight |
 
 A cost statistic is required: Home Assistant refuses to price **external**
 statistics from an entity, so the integration computes the cost itself. Every
@@ -369,6 +371,20 @@ found, type `peak_consumption`, `off_peak_cost`, etc. The price sensor is only
 for charts and automations; the dashboard cost option must use a cost
 statistic.
 
+### Gas
+
+The feed also carries daily gas readings. The integration imports each day's
+total at the local start of that day (midnight) as
+`dte_energy:gas_consumption` (CCF):
+
+1. In the Energy dashboard, open the **Gas** step.
+2. Add a gas source and pick `dte_energy:gas_consumption`.
+3. Leave the cost option empty; there is no gas cost statistic.
+
+The daily gas total is correct in the dashboard's daily view. Because Home
+Assistant stores hourly statistics, the single midnight row makes an hourly
+gas graph spiky; that is expected for a daily meter.
+
 ### Visualising the price itself
 
 The Energy dashboard charts cost, not the tariff. To see the rate steps, use
@@ -411,9 +427,15 @@ next boundary are also exposed:
   combined series is re-costed and the per-band series is created. The
   existing combined dashboard connection keeps working during the rebuild;
   switch it to the per-band connections once the new statistics appear.
-- The feed's gas series (CCF) is ignored; the tariff is electric-only.
+  Upgrading from 0.2.0 only adds the gas statistic; the electric statistics are
+  left alone.
+- Gas is imported as daily usage only, at local midnight. There is no gas cost
+  statistic; the modelled tariff is electric-only. 259 of the 424 current gas
+  readings are flagged estimated, so they may be revised like the electric
+  readings.
 - The integration writes statistics for the whole feed on first setup (about
-  14 months, 10,000 hourly rows in the current export).
+  14 months: 10,000 electric hourly rows and 424 daily gas rows in the current
+  export).
 - The share link grants read access to the household's usage history. It is
   stored in the config entry; treat it as a secret.
 

@@ -21,6 +21,9 @@ COST_STAT_ID = f"{DOMAIN}:grid_cost"
 ENERGY_STAT_NAME = "DTE electric grid consumption"
 COST_STAT_NAME = "DTE electric grid cost"
 
+GAS_STAT_ID = f"{DOMAIN}:gas_consumption"
+GAS_STAT_NAME = "DTE gas consumption"
+
 # Tariff band -> human label used in the per-band statistic names.
 BAND_LABELS = {
     "off_peak": "off-peak",
