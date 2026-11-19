@@ -23,6 +23,8 @@ COST_STAT_NAME = "DTE electric grid cost"
 
 GAS_STAT_ID = f"{DOMAIN}:gas_consumption"
 GAS_STAT_NAME = "DTE gas consumption"
+GAS_COST_STAT_ID = f"{DOMAIN}:gas_cost"
+GAS_COST_STAT_NAME = "DTE gas cost"
 
 # Tariff band -> human label used in the per-band statistic names.
 BAND_LABELS = {

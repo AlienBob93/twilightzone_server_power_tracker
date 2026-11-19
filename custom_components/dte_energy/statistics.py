@@ -43,10 +43,13 @@ from .const import (
     DOMAIN,
     ENERGY_STAT_ID,
     ENERGY_STAT_NAME,
+    GAS_COST_STAT_ID,
+    GAS_COST_STAT_NAME,
     GAS_STAT_ID,
     GAS_STAT_NAME,
 )
 from .dte import ElectricInterval, GasInterval
+from .gas_tariff import GAS_TARIFF_VERSION, cost_for_day
 from .tariff import TZ, rate_at
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,7 +59,7 @@ OVERLAP = timedelta(days=3)
 KEEP = timedelta(days=14)
 
 GAS_STORE_VERSION = 1
-GAS_SCHEMA_VERSION = 1
+GAS_SCHEMA_VERSION = 2
 GAS_OVERLAP = timedelta(days=3)
 GAS_KEEP = timedelta(days=14)
 
@@ -157,11 +160,13 @@ class ImportState:
 
 @dataclass(slots=True)
 class GasState:
-    """Persisted gas import cursor and cumulative total."""
+    """Persisted gas import cursor and cumulative totals."""
 
     last_start: datetime | None = None
     total: float = 0.0
-    checkpoints: list[tuple[datetime, float]] = field(default_factory=list)
+    cost_total: float = 0.0
+    checkpoints: list[tuple[datetime, float, float]] = field(default_factory=list)
+    tariff_version: int = 0
     schema: int = GAS_SCHEMA_VERSION
 
     @classmethod
@@ -169,11 +174,15 @@ class GasState:
         if data.get("schema") != GAS_SCHEMA_VERSION:
             return cls()
 
-        checkpoints: list[tuple[datetime, float]] = []
+        checkpoints: list[tuple[datetime, float, float]] = []
         for item in data.get("checkpoints", []):
             try:
                 checkpoints.append(
-                    (datetime.fromisoformat(item[0]), float(item[1]))
+                    (
+                        datetime.fromisoformat(item[0]),
+                        float(item[1]),
+                        float(item[2]),
+                    )
                 )
             except (TypeError, ValueError, IndexError):
                 continue
@@ -183,7 +192,9 @@ class GasState:
         return cls(
             last_start=datetime.fromisoformat(last_start) if last_start else None,
             total=float(data.get("total") or 0),
+            cost_total=float(data.get("cost_total") or 0),
             checkpoints=checkpoints,
+            tariff_version=int(data.get("tariff_version") or 0),
             schema=GAS_SCHEMA_VERSION,
         )
 
@@ -192,9 +203,12 @@ class GasState:
             "schema": self.schema,
             "last_start": self.last_start.isoformat() if self.last_start else None,
             "total": self.total,
+            "cost_total": self.cost_total,
             "checkpoints": [
-                [start.isoformat(), total] for start, total in self.checkpoints
+                [start.isoformat(), total, cost]
+                for start, total, cost in self.checkpoints
             ],
+            "tariff_version": self.tariff_version,
         }
 
 
@@ -392,11 +406,14 @@ async def async_import_gas(
     intervals: list[GasInterval],
     now: datetime | None = None,
 ) -> int:
-    """Import daily gas usage into a long-term statistic.
+    """Import daily gas usage and cost into long-term statistics.
 
     Each daily reading is placed at the local start of its day (midnight), which
     is top-of-hour in UTC. Home Assistant stores hourly statistics, so the daily
     total is one row; the Energy dashboard's daily gas buckets sum it correctly.
+
+    The monthly customer charge, IRM surcharge and Michigan sales tax are
+    applied on the first imported day of each calendar month.
     """
     now = now or dt_util.utcnow()
 
@@ -416,13 +433,27 @@ async def async_import_gas(
 
     store = Store(hass, GAS_STORE_VERSION, f"{DOMAIN}.{entry_id}.gas_state")
     state = GasState.from_dict(await store.async_load() or {})
+    if state.tariff_version != GAS_TARIFF_VERSION:
+        # Rates or fixed charges changed; rebuild the whole gas history.
+        state = GasState()
+
+    # Charge the monthly fixed amount on the first available day of the month.
+    charge_dates: set[date] = set()
+    seen_months: set[tuple[int, int]] = set()
+    for interval in complete:
+        day = interval.start.astimezone(TZ).date()
+        key = (day.year, day.month)
+        if key not in seen_months:
+            seen_months.add(key)
+            charge_dates.add(day)
 
     anchor = _select_gas_anchor(state, complete)
     if anchor is None:
         after: datetime | None = None
         total = 0.0
+        cost_total = 0.0
     else:
-        after, total = anchor
+        after, total, cost_total = anchor
 
     rows = [
         interval for interval in complete if after is None or interval.start > after
@@ -430,36 +461,53 @@ async def async_import_gas(
     if not rows:
         return 0
 
-    stats: list[StatisticData] = []
-    checkpoints: list[tuple[datetime, float]] = []
+    usage_stats: list[StatisticData] = []
+    cost_stats: list[StatisticData] = []
+    checkpoints: list[tuple[datetime, float, float]] = []
 
     for interval in rows:
+        day = interval.start.astimezone(TZ).date()
+        cost = cost_for_day(day, interval.ccf, day in charge_dates)
+
         total += interval.ccf
-        stats.append(
+        cost_total += cost
+
+        usage_stats.append(
             StatisticData(start=interval.start, state=interval.ccf, sum=total)
         )
-        checkpoints.append((interval.start, total))
+        cost_stats.append(
+            StatisticData(start=interval.start, state=cost, sum=cost_total)
+        )
+        checkpoints.append((interval.start, total, cost_total))
 
     async_add_external_statistics(
         hass,
         _metadata(GAS_STAT_ID, GAS_STAT_NAME, "CCF", "volume"),
-        stats,
+        usage_stats,
+    )
+    async_add_external_statistics(
+        hass,
+        _metadata(GAS_COST_STAT_ID, GAS_COST_STAT_NAME, "USD", None),
+        cost_stats,
     )
 
     state.last_start = rows[-1].start
     state.total = total
+    state.cost_total = cost_total
     state.checkpoints = _merge_gas_checkpoints(
         state.checkpoints, checkpoints, state.last_start
     )
+    state.tariff_version = GAS_TARIFF_VERSION
     state.schema = GAS_SCHEMA_VERSION
     await store.async_save(state.as_dict())
 
     _LOGGER.debug(
-        "Imported %d DTE gas intervals (%s .. %s); %.3f CCF",
+        "Imported %d DTE gas intervals (%s .. %s); %.3f CCF, $%.2f",
         len(rows),
         rows[0].start.isoformat(),
         rows[-1].start.isoformat(),
         total,
+        cost_total,
     )
 
     return len(rows)
@@ -515,7 +563,7 @@ def _merge_checkpoints(
 
 def _select_gas_anchor(
     state: GasState, intervals: list[GasInterval]
-) -> tuple[datetime, float] | None:
+) -> tuple[datetime, float, float] | None:
     """Pick the gas cumulative anchor to re-import from."""
     if state.last_start is None:
         return None
@@ -530,18 +578,18 @@ def _select_gas_anchor(
         if intervals and anchor[0] >= intervals[0].start:
             return anchor
 
-    return (state.last_start, state.total)
+    return (state.last_start, state.total, state.cost_total)
 
 
 def _merge_gas_checkpoints(
-    existing: list[tuple[datetime, float]],
-    new: list[tuple[datetime, float]],
+    existing: list[tuple[datetime, float, float]],
+    new: list[tuple[datetime, float, float]],
     last_start: datetime,
-) -> list[tuple[datetime, float]]:
+) -> list[tuple[datetime, float, float]]:
     """Merge gas checkpoints, keeping the most recent ones only."""
-    merged = {start: (start, total) for start, total in existing}
-    for start, total in new:
-        merged[start] = (start, total)
+    merged = {start: (start, total, cost) for start, total, cost in existing}
+    for start, total, cost in new:
+        merged[start] = (start, total, cost)
 
     keep_from = last_start - GAS_KEEP
     return sorted(

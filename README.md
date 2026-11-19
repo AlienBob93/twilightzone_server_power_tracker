@@ -280,10 +280,10 @@ entity registry.
 
 The Go bridge deliberately publishes only the UPS load. A separate custom
 integration, [`custom_components/dte_energy`](custom_components/dte_energy),
-brings DTE's whole-home electric usage and daily gas usage into Home Assistant
-and prices the electric side with the residential time-of-day tariff. The UPS
-load sensor is not priced by this integration; it remains a separate power
-sensor.
+brings DTE's whole-home electric usage and daily gas usage into Home Assistant,
+prices the electric side with the residential time-of-day tariff, and prices gas
+with Rate A. The UPS load sensor is not priced by this integration; it remains a
+separate power sensor.
 
 The DTE share link is a Green Button file with hourly electric kWh, daily gas
 CCF and no prices. The integration parses it and writes a combined series plus
@@ -298,6 +298,7 @@ one pair per electric tariff band:
 | `dte_energy:peak_consumption` / `_cost` | kWh / USD | Peak intervals |
 | `dte_energy:critical_consumption` / `_cost` | kWh / USD | Critical-event intervals; only created once event dates are configured |
 | `dte_energy:gas_consumption` | CCF | Daily gas usage, placed at local midnight |
+| `dte_energy:gas_cost` | USD | Daily gas cost, including the monthly fixed charge and 4% Michigan sales tax |
 
 A cost statistic is required: Home Assistant refuses to price **external**
 statistics from an entity, so the integration computes the cost itself. Every
@@ -374,16 +375,36 @@ statistic.
 ### Gas
 
 The feed also carries daily gas readings. The integration imports each day's
-total at the local start of that day (midnight) as
-`dte_energy:gas_consumption` (CCF):
+total at the local start of that day (midnight) and prices it with DTE's
+Residential Rate A / GCR tariff:
 
 1. In the Energy dashboard, open the **Gas** step.
 2. Add a gas source and pick `dte_energy:gas_consumption`.
-3. Leave the cost option empty; there is no gas cost statistic.
+3. Under cost, choose **Use an entity tracking the total costs** and pick
+   `dte_energy:gas_cost`.
 
-The daily gas total is correct in the dashboard's daily view. Because Home
-Assistant stores hourly statistics, the single midnight row makes an hourly
-gas graph spiky; that is expected for a daily meter.
+The rate table is in `gas_tariff.py`, taken from the
+[November 2026 rate card](https://www.dteenergy.com/content/dam/dteenergy/deg/website/common/about-us/company-information/dte-gas-company/notices/rateCard.pdf).
+Per Ccf, the rate is the card's Rate A / GCR total (distribution + GCR + Energy
+Waste Reduction + reservation). The fixed amount is the monthly customer charge
+plus the monthly IRM surcharge. Washtenaw County adds 4% Michigan sales tax and
+no City of Detroit utility users tax.
+
+The fixed amount and tax are applied on the first imported day of each calendar
+month, so:
+
+- Monthly and yearly gas costs track the bill's base rate plus tax closely.
+- The first day of a month has a large daily cost; that is the fixed charge.
+- The first partial month in the feed is charged on its first available day.
+
+Months before November 2025 use the November 2025 card, and months after
+November 2026 use the November 2026 card until `gas_tariff.py` is updated. If
+the apartment is master-metered on Rate 2A instead of Rate A, change the table
+(Rate 2A Meter Class I uses a $0.97270/Ccf total and the same $15.40 customer
+charge; Meter Class II uses a $55.00 customer charge).
+
+The electric rates are base rates and exclude PSCR and taxes; the gas cost
+includes the 4% sales tax because it is a single known rate.
 
 ### Visualising the price itself
 
@@ -427,12 +448,14 @@ next boundary are also exposed:
   combined series is re-costed and the per-band series is created. The
   existing combined dashboard connection keeps working during the rebuild;
   switch it to the per-band connections once the new statistics appear.
-  Upgrading from 0.2.0 only adds the gas statistic; the electric statistics are
-  left alone.
-- Gas is imported as daily usage only, at local midnight. There is no gas cost
-  statistic; the modelled tariff is electric-only. 259 of the 424 current gas
+  Upgrading from 0.2.0 adds the gas usage statistic; upgrading from 0.3.0
+  re-imports gas to add the cost series. The electric statistics are left alone
+  by both.
+- Gas usage and cost are daily, at local midnight. 259 of the 424 current gas
   readings are flagged estimated, so they may be revised like the electric
-  readings.
+  readings. The cost uses Rate A / GCR, the monthly customer charge plus IRM,
+  and 4% Michigan sales tax; bump `GAS_TARIFF_VERSION` after editing
+  `gas_tariff.py` to re-cost the gas history.
 - The integration writes statistics for the whole feed on first setup (about
   14 months: 10,000 electric hourly rows and 424 daily gas rows in the current
   export).
