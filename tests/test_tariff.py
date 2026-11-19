@@ -20,6 +20,18 @@ tariff = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = tariff
 _spec.loader.exec_module(tariff)
 
+CONST_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "custom_components"
+    / "dte_energy"
+    / "const.py"
+)
+_const_spec = importlib.util.spec_from_file_location("dte_const", CONST_PATH)
+assert _const_spec and _const_spec.loader
+const = importlib.util.module_from_spec(_const_spec)
+sys.modules[_const_spec.name] = const
+_const_spec.loader.exec_module(const)
+
 TZ = tariff.TZ
 
 
@@ -110,6 +122,11 @@ class TariffTest(unittest.TestCase):
         self.assertEqual(tariff.parse_critical_dates(""), frozenset())
         with self.assertRaises(ValueError):
             tariff.parse_critical_dates("not-a-date")
+
+    def test_every_band_has_a_label(self) -> None:
+        self.assertEqual(
+            set(const.BAND_LABELS), {band.value for band in tariff.Band}
+        )
 
 
 if __name__ == "__main__":

@@ -285,17 +285,24 @@ the residential time-of-day tariff. The UPS load sensor is not priced by this
 integration; it remains a separate power sensor.
 
 The DTE share link is a Green Button file with hourly kWh and no prices. The
-integration parses it and writes **two external statistics** into the recorder:
+integration parses it and writes a combined series plus one pair per tariff
+band:
 
 | Statistic | Unit | Purpose |
 | --- | --- | --- |
-| `dte_energy:grid_consumption` | kWh | Grid consumption for the Energy dashboard |
-| `dte_energy:grid_cost` | USD | Cost per interval at the applicable tariff |
+| `dte_energy:grid_consumption` | kWh | Combined grid consumption, one connection |
+| `dte_energy:grid_cost` | USD | Combined cost at the applicable tariff |
+| `dte_energy:off_peak_consumption` / `_cost` | kWh / USD | Off-peak intervals |
+| `dte_energy:mid_peak_consumption` / `_cost` | kWh / USD | Mid-peak intervals (Dynamic Peak Pricing history) |
+| `dte_energy:peak_consumption` / `_cost` | kWh / USD | Peak intervals |
+| `dte_energy:critical_consumption` / `_cost` | kWh / USD | Critical-event intervals; only created once event dates are configured |
 
 A cost statistic is required: Home Assistant refuses to price **external**
-statistics from an entity, so the integration computes the cost itself. Both
-series are cumulative `sum` statistics with one row per meter interval, and
-the full history in the link is backfilled on first setup.
+statistics from an entity, so the integration computes the cost itself. Every
+series is a cumulative `sum` statistic: the combined series has one row per
+meter interval, and each band series has one row per interval in that band.
+The full history in the link is backfilled on first setup, and the band totals
+partition the combined totals exactly.
 
 ### Tariff modelled
 
@@ -328,21 +335,39 @@ are not included, so the dashboard cost is lower than the billed amount.
 
 ### Energy dashboard
 
+Pick **one** of the two layouts. Using both counts every kWh twice.
+
+**A. Single connection**
+
 1. **Settings → Dashboards → Energy → Electricity grid → Add grid connection**.
-2. Select the consumption statistic **DTE electric grid consumption**
-   (`dte_energy:grid_consumption`).
-3. Under cost, choose **Use an entity tracking the total costs** and select
-   **DTE electric grid cost** (`dte_energy:grid_cost`).
+2. Consumption: `dte_energy:grid_consumption`.
+3. Cost: **Use an entity tracking the total costs** → `dte_energy:grid_cost`.
 4. Save.
 
-The picker searches statistics by ID, not display name. If the names are not
-found, type `grid_consumption` or `grid_cost`. The price sensor is only for
-charts and automations; the dashboard cost option must use the cost statistic.
+**B. One connection per tariff (split view)**
 
-The dashboard now shows both energy and cost for the whole history in the feed.
-Because cost is priced per interval, the 3–7 p.m. bars are visibly more
-expensive than off-peak bars, and the rate change on 2026-12-09 appears in the
-cost series.
+1. Remove the combined DTE grid connection if it exists.
+2. Add one grid connection per band, each with its own cost statistic:
+
+   | Connection name | Consumption | Cost |
+   | --- | --- | --- |
+   | DTE off-peak | `dte_energy:off_peak_consumption` | `dte_energy:off_peak_cost` |
+   | DTE mid-peak | `dte_energy:mid_peak_consumption` | `dte_energy:mid_peak_cost` |
+   | DTE peak | `dte_energy:peak_consumption` | `dte_energy:peak_cost` |
+   | DTE critical | `dte_energy:critical_consumption` | `dte_energy:critical_cost` |
+
+3. Add every band that has data. `mid_peak` exists for the Dynamic Peak
+   Pricing history; `critical` only exists after you configure event dates.
+
+The sources table and usage graph then split peak, off-peak (and mid-peak or
+critical) natively on the default Energy panel, and the cost view prices each
+band at its own rate. This is the closest the built-in panel gets to showing
+the tariff; it still has no price line.
+
+The picker searches statistics by ID, not display name. If the names are not
+found, type `peak_consumption`, `off_peak_cost`, etc. The price sensor is only
+for charts and automations; the dashboard cost option must use a cost
+statistic.
 
 ### Visualising the price itself
 
@@ -380,8 +405,12 @@ next boundary are also exposed:
   re-imported on every poll so the running sums pick up corrections; older
   revisions are ignored.
 - Changing the critical-event dates (or bumping `TARIFF_VERSION` after editing
-  a rate) triggers a full re-cost of the feed. Keep the share link valid long
-  enough for that.
+  a rate) triggers a full re-cost of the feed. The critical series is cleared
+  first, so removed event dates do not leave stale rows behind.
+- Upgrading from 0.1.0 resets the import cursor and re-imports the feed: the
+  combined series is re-costed and the per-band series is created. The
+  existing combined dashboard connection keeps working during the rebuild;
+  switch it to the per-band connections once the new statistics appear.
 - The feed's gas series (CCF) is ignored; the tariff is electric-only.
 - The integration writes statistics for the whole feed on first setup (about
   14 months, 10,000 hourly rows in the current export).
